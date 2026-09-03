@@ -10,10 +10,16 @@ BGremover has two parts:
 
 ## Browser app
 
-Open `web/index.html` in a browser. You can also host the `web/` folder as a static site.
+Serve the `web/` folder over local HTTP, then open it in a browser:
+
+```
+npx serve web
+```
+
+Opening `web/index.html` directly from disk (a `file://` URL) does not work. Browsers block ES module scripts, which this app relies on, from loading over `file://`.
 
 **Manual use**
-1. Open the page.
+1. Open the served page.
 2. Drop an image on the page, or click the drop zone to choose a file.
 3. Wait for the status line to show the result size and time.
 4. Click **Download PNG**.
@@ -24,7 +30,7 @@ Add query parameters to the URL to process an image without clicking anything:
 - `?src=<image-url>` loads and processes that image on page load.
 - `&bg=white`, `&bg=black`, `&bg=<css-colour-name>` or `&bg=<hex-without-the-hash>` fills the background with a solid colour instead of leaving it transparent.
 
-Example: `web/index.html?src=https://example.com/photo.jpg&bg=white`
+Example: `http://localhost:3000/index.html?src=https://example.com/photo.jpg&bg=white`
 
 The page exposes a fixed set of elements and behaviour for automation:
 - The cutout renders into `canvas#cv`.

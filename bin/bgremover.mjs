@@ -55,6 +55,30 @@ function outputPathFor(inputPath, outDir) {
   return path.join(dir, `${base}-no-bg.png`);
 }
 
+function computeOutputs(inputs, outDir) {
+  const inputSet = new Set(inputs.map((p) => path.resolve(p)));
+  const outputs = [];
+  const seenBy = new Map();
+
+  for (const input of inputs) {
+    const outPath = outputPathFor(input, outDir);
+    const resolved = path.resolve(outPath);
+
+    if (inputSet.has(resolved)) {
+      throw new Error(`refusing to run: output for ${input} would overwrite an input file (${outPath})`);
+    }
+    if (seenBy.has(resolved)) {
+      throw new Error(
+        `refusing to run: ${seenBy.get(resolved)} and ${input} would both write to ${outPath}`,
+      );
+    }
+    seenBy.set(resolved, input);
+    outputs.push(outPath);
+  }
+
+  return outputs;
+}
+
 function logProgress(info) {
   if (info.status === "progress" && info.file) {
     process.stdout.write(`\rdownloading model: ${info.file} ${info.progress.toFixed(0)}%   `);
@@ -84,6 +108,15 @@ async function main() {
 
   const bgColor = normalizeColor(bg);
 
+  let outputs;
+  try {
+    outputs = computeOutputs(inputs, outDir);
+  } catch (err) {
+    console.error(err.message);
+    process.exitCode = 1;
+    return;
+  }
+
   if (outDir) {
     await mkdir(outDir, { recursive: true });
   }
@@ -101,8 +134,9 @@ async function main() {
   }
 
   let failures = 0;
-  for (const input of inputs) {
-    const outPath = outputPathFor(input, outDir);
+  for (let i = 0; i < inputs.length; i++) {
+    const input = inputs[i];
+    const outPath = outputs[i];
     const start = performance.now();
     try {
       await access(input);
