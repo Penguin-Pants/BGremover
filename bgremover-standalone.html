@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BGremover</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7f8;
+    --fg: #1a1a1a;
+    --muted: #6b6b70;
+    --accent: #2563eb;
+    --border: #d8d8dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a;
+      --fg: #f0f0f2;
+      --muted: #9a9aa2;
+      --border: #303036;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 3rem 1.5rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 1.25rem; margin: 0; }
+  p.tagline { color: var(--muted); margin: -1rem 0 0; text-align: center; }
+  #dropzone {
+    width: min(480px, 100%);
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 2.5rem 1.5rem;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color 0.15s, opacity 0.15s;
+  }
+  #dropzone.dragover { border-color: var(--accent); color: var(--accent); }
+  #dropzone.disabled { pointer-events: none; opacity: 0.5; }
+  #cv {
+    max-width: min(480px, 100%);
+    max-height: 60vh;
+    background:
+      linear-gradient(45deg, #ccc 25%, transparent 25%) -8px 0/16px 16px,
+      linear-gradient(-45deg, #ccc 25%, transparent 25%) -8px 0/16px 16px,
+      linear-gradient(45deg, transparent 75%, #ccc 75%) -8px 0/16px 16px,
+      linear-gradient(-45deg, transparent 75%, #ccc 75%) -8px 0/16px 16px;
+    border-radius: 8px;
+    display: none;
+  }
+  #cv.visible { display: block; }
+  #status { color: var(--muted); min-height: 1.2em; }
+  #dl {
+    font: inherit;
+    padding: 0.5rem 1.25rem;
+    border-radius: 8px;
+    border: none;
+    background: var(--accent);
+    color: white;
+    cursor: pointer;
+  }
+  #dl:disabled { opacity: 0.4; cursor: default; }
+  #file-input { display: none; }
+</style>
+</head>
+<body>
+  <h1>BGremover</h1>
+  <p class="tagline">Remove image backgrounds locally. Nothing is uploaded.</p>
+
+  <div id="dropzone" role="button" tabindex="0">
+    Drop an image here, or click to choose one
+    <input id="file-input" type="file" accept="image/*" />
+  </div>
+
+  <canvas id="cv"></canvas>
+  <div id="status"></div>
+  <button id="dl" disabled>Download PNG</button>
+
+  <script>
+(function () {
+"use strict";
+
+const MODEL_ID = "onnx-community/BiRefNet_lite-ONNX";
+
+function normalizeColor(raw) {
+  if (!raw) return null;
+  return /^[0-9a-fA-F]{3,8}$/.test(raw) ? `#${raw}` : raw;
+}
+
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
+
+const params = new URLSearchParams(location.search);
+const bgParam = params.get("bg");
+const srcParam = params.get("src");
+
+const canvas = document.querySelector("#cv");
+const ctx = canvas.getContext("2d");
+const statusEl = document.querySelector("#status");
+const downloadBtn = document.querySelector("#dl");
+const dropzone = document.querySelector("#dropzone");
+const fileInput = document.querySelector("#file-input");
+
+const workerBlob = new Blob(["import { pipeline } from \"https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm\";\nconst MODEL_ID = \"onnx-community/BiRefNet_lite-ONNX\";\n\nconst MODEL_LOAD_TIMEOUT_MS = 120_000;\nconst INFERENCE_TIMEOUT_MS = 60_000;\n\nlet segmenterPromise = null;\n\nfunction withTimeout(promise, ms, label) {\n  return Promise.race([\n    promise,\n    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),\n  ]);\n}\n\nfunction loadSegmenter() {\n  if (!segmenterPromise) {\n    segmenterPromise = withTimeout(createSegmenter(), MODEL_LOAD_TIMEOUT_MS, \"loading model\").catch((err) => {\n      segmenterPromise = null;\n      throw err;\n    });\n  }\n  return segmenterPromise;\n}\n\nasync function createSegmenter() {\n  const progress_callback = (info) => {\n    if (info.status === \"progress\") {\n      postMessage({ type: \"status\", text: `loading model… ${Math.round(info.progress)}%` });\n    }\n  };\n\n  if (\"gpu\" in navigator) {\n    try {\n      return await pipeline(\"background-removal\", MODEL_ID, {\n        device: \"webgpu\",\n        dtype: \"fp16\",\n        progress_callback,\n      });\n    } catch (err) {\n      console.warn(\"WebGPU pipeline failed, falling back to WASM:\", err);\n    }\n  }\n\n  return pipeline(\"background-removal\", MODEL_ID, { device: \"wasm\", progress_callback });\n}\n\nself.onmessage = async (event) => {\n  const { source } = event.data;\n  try {\n    postMessage({ type: \"status\", text: \"loading model…\" });\n    const segmenter = await loadSegmenter();\n\n    postMessage({ type: \"status\", text: \"processing…\" });\n    const start = performance.now();\n    const cutout = await withTimeout(segmenter(source), INFERENCE_TIMEOUT_MS, \"processing\");\n    const seconds = (performance.now() - start) / 1000;\n\n    const { data, width, height } = cutout;\n    const buffer = data.buffer;\n    postMessage({ type: \"result\", width, height, buffer, seconds }, [buffer]);\n  } catch (err) {\n    postMessage({ type: \"error\", message: err?.message ?? String(err) });\n  }\n};\n"], { type: "text/javascript" });
+const worker = new Worker(URL.createObjectURL(workerBlob), { type: "module" });
+
+let downloadName = "image";
+
+function baseName(nameOrUrl) {
+  const last = nameOrUrl.split("/").pop().split("?")[0].split("#")[0];
+  return last.replace(/\.[^.]+$/, "") || "image";
+}
+
+function setStatus(text) {
+  statusEl.textContent = text;
+}
+
+function setBusy(busy) {
+  fileInput.disabled = busy;
+  dropzone.classList.toggle("disabled", busy);
+  if (busy) downloadBtn.disabled = true;
+}
+
+function process(source, name) {
+  if (source instanceof File && source.size > MAX_FILE_BYTES) {
+    setStatus(`failed: file too large (max ${MAX_FILE_BYTES / (1024 * 1024)}MB)`);
+    return;
+  }
+  downloadName = name;
+  setBusy(true);
+  worker.postMessage({ source });
+}
+
+worker.onerror = (event) => {
+  setStatus(`failed: ${event.message ?? "worker could not start"}`);
+  setBusy(false);
+};
+
+worker.onmessage = (event) => {
+  const msg = event.data;
+  if (msg.type === "status") {
+    setStatus(msg.text);
+    return;
+  }
+  if (msg.type === "result") {
+    const { width, height, buffer, seconds } = msg;
+    canvas.width = width;
+    canvas.height = height;
+    canvas.classList.add("visible");
+
+    const offscreen = new OffscreenCanvas(width, height);
+    offscreen.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(buffer), width, height), 0, 0);
+
+    ctx.clearRect(0, 0, width, height);
+    const bgColor = normalizeColor(bgParam);
+    if (bgColor) {
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, width, height);
+    }
+    ctx.drawImage(offscreen, 0, 0);
+
+    setStatus(`${width}x${height} · ${seconds.toFixed(1)}s`);
+    setBusy(false);
+    downloadBtn.disabled = false;
+    return;
+  }
+  if (msg.type === "error") {
+    setStatus(`failed: ${msg.message}`);
+    setBusy(false);
+  }
+};
+
+downloadBtn.addEventListener("click", () => {
+  const link = document.createElement("a");
+  link.download = `${downloadName}-no-bg.png`;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+});
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    fileInput.click();
+  }
+});
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  if (file) process(file, baseName(file.name));
+});
+
+for (const evt of ["dragover", "dragleave", "drop"]) {
+  dropzone.addEventListener(evt, (e) => e.preventDefault());
+}
+dropzone.addEventListener("dragover", () => dropzone.classList.add("dragover"));
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+dropzone.addEventListener("drop", (e) => {
+  dropzone.classList.remove("dragover");
+  const file = e.dataTransfer.files[0];
+  if (file) process(file, baseName(file.name));
+});
+
+if (srcParam) {
+  setStatus("loading image…");
+  process(srcParam, baseName(srcParam));
+}
+
+})();
+</script>
+</body>
+</html>
