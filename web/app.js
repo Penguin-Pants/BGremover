@@ -1,3 +1,7 @@
+import { normalizeColor } from "./shared.mjs";
+
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
+
 const params = new URLSearchParams(location.search);
 const bgParam = params.get("bg");
 const srcParam = params.get("src");
@@ -12,11 +16,6 @@ const fileInput = document.querySelector("#file-input");
 const worker = new Worker("./worker.js", { type: "module" });
 
 let downloadName = "image";
-
-function resolveBgColor(raw) {
-  if (!raw) return null;
-  return /^[0-9a-fA-F]{3,8}$/.test(raw) ? `#${raw}` : raw;
-}
 
 function baseName(nameOrUrl) {
   const last = nameOrUrl.split("/").pop().split("?")[0].split("#")[0];
@@ -34,6 +33,10 @@ function setBusy(busy) {
 }
 
 function process(source, name) {
+  if (source instanceof File && source.size > MAX_FILE_BYTES) {
+    setStatus(`failed: file too large (max ${MAX_FILE_BYTES / (1024 * 1024)}MB)`);
+    return;
+  }
   downloadName = name;
   setBusy(true);
   worker.postMessage({ source });
@@ -60,7 +63,7 @@ worker.onmessage = (event) => {
     offscreen.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(buffer), width, height), 0, 0);
 
     ctx.clearRect(0, 0, width, height);
-    const bgColor = resolveBgColor(bgParam);
+    const bgColor = normalizeColor(bgParam);
     if (bgColor) {
       ctx.fillStyle = bgColor;
       ctx.fillRect(0, 0, width, height);
@@ -86,6 +89,12 @@ downloadBtn.addEventListener("click", () => {
 });
 
 dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    fileInput.click();
+  }
+});
 fileInput.addEventListener("change", () => {
   const file = fileInput.files[0];
   if (file) process(file, baseName(file.name));

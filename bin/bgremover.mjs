@@ -2,8 +2,18 @@
 import { pipeline } from "@huggingface/transformers";
 import { access, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { MODEL_ID, normalizeColor } from "../web/shared.mjs";
 
-const MODEL_ID = "onnx-community/BiRefNet_lite-ONNX";
+const MKDIR_TIMEOUT_MS = 10_000;
+const MODEL_LOAD_TIMEOUT_MS = 120_000;
+const INFERENCE_TIMEOUT_MS = 60_000;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
+  ]);
+}
 
 function printUsage() {
   console.log(`bgremover - remove image backgrounds locally. Nothing is uploaded.
@@ -20,7 +30,15 @@ Examples:
   bgremover photo.jpg
   bgremover a.jpg b.png --bg white --out ./cut
 
-The first run downloads the model (~210MB) to ~/.cache/huggingface and reuses it after that.`);
+The first run downloads the full-precision model to ~/.cache/huggingface (a few hundred megabytes) and reuses it after that.`);
+}
+
+function requireValue(argv, i, flag) {
+  const value = argv[i + 1];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
 }
 
 function parseArgs(argv) {
@@ -30,9 +48,11 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--bg") {
-      bg = argv[++i];
+      bg = requireValue(argv, i, "--bg");
+      i++;
     } else if (arg === "--out") {
-      outDir = argv[++i];
+      outDir = requireValue(argv, i, "--out");
+      i++;
     } else if (arg === "-h" || arg === "--help") {
       return { help: true };
     } else if (arg.startsWith("--")) {
@@ -42,11 +62,6 @@ function parseArgs(argv) {
     }
   }
   return { inputs, bg, outDir };
-}
-
-function normalizeColor(bg) {
-  if (!bg) return null;
-  return /^[0-9a-fA-F]{3,8}$/.test(bg) ? `#${bg}` : bg;
 }
 
 function outputPathFor(inputPath, outDir) {
@@ -118,19 +133,20 @@ async function main() {
   }
 
   if (outDir) {
-    await mkdir(outDir, { recursive: true });
+    await withTimeout(mkdir(outDir, { recursive: true }), MKDIR_TIMEOUT_MS, `creating ${outDir}`);
   }
 
   let segmenter;
   try {
-    segmenter = await pipeline("background-removal", MODEL_ID, {
-      device: "cpu",
-      progress_callback: logProgress,
-    });
+    segmenter = await withTimeout(
+      pipeline("background-removal", MODEL_ID, { device: "cpu", progress_callback: logProgress }),
+      MODEL_LOAD_TIMEOUT_MS,
+      "loading model",
+    );
   } catch (err) {
     console.error(`\nfailed to load model: ${err.message}`);
-    process.exitCode = 1;
-    return;
+    // process.exit: a timed-out load may still be downloading in the background.
+    process.exit(1);
   }
 
   let failures = 0;
@@ -140,7 +156,7 @@ async function main() {
     const start = performance.now();
     try {
       await access(input);
-      const cutout = await segmenter(input);
+      const cutout = await withTimeout(segmenter(input), INFERENCE_TIMEOUT_MS, "processing");
       if (bgColor) {
         await cutout.toSharp().flatten({ background: bgColor }).png().toFile(outPath);
       } else {
@@ -154,7 +170,11 @@ async function main() {
     }
   }
 
-  process.exitCode = failures > 0 ? 1 : 0;
+  // process.exit: a timed-out per-image call may still be running in the background.
+  process.exit(failures > 0 ? 1 : 0);
 }
 
-main();
+main().catch((err) => {
+  console.error(`unexpected error: ${err.message}`);
+  process.exit(1);
+});
