@@ -1,0 +1,16 @@
+{
+  "name": "bgremover",
+  "version": "1.0.0",
+  "description": "Remove image backgrounds locally. Nothing is uploaded.",
+  "type": "module",
+  "bin": {
+    "bgremover": "./bin/bgremover.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "sharp": "^0.34.5"
+  }
+}
