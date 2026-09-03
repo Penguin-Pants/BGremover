@@ -1,11 +1,25 @@
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm";
+import { MODEL_ID } from "./shared.mjs";
 
-const MODEL_ID = "onnx-community/BiRefNet_lite-ONNX";
+const MODEL_LOAD_TIMEOUT_MS = 120_000;
+const INFERENCE_TIMEOUT_MS = 60_000;
 
 let segmenterPromise = null;
 
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
+  ]);
+}
+
 function loadSegmenter() {
-  segmenterPromise ??= createSegmenter();
+  if (!segmenterPromise) {
+    segmenterPromise = withTimeout(createSegmenter(), MODEL_LOAD_TIMEOUT_MS, "loading model").catch((err) => {
+      segmenterPromise = null;
+      throw err;
+    });
+  }
   return segmenterPromise;
 }
 
@@ -39,7 +53,7 @@ self.onmessage = async (event) => {
 
     postMessage({ type: "status", text: "processing…" });
     const start = performance.now();
-    const cutout = await segmenter(source);
+    const cutout = await withTimeout(segmenter(source), INFERENCE_TIMEOUT_MS, "processing");
     const seconds = (performance.now() - start) / 1000;
 
     const { data, width, height } = cutout;

@@ -38,7 +38,7 @@ The page exposes a fixed set of elements and behaviour for automation:
 - Read the result with `document.querySelector('#cv').toDataURL('image/png')`, or click `#dl` to download `<name>-no-bg.png`.
 - The model runs in a Web Worker, off the main thread. Headless Chrome can poll `#status` while it waits. Launch Chrome with `--enable-unsafe-webgpu` for GPU support in headless mode.
 
-The first run downloads the model (about 110MB) to the browser cache. Later runs reuse it. A GPU with WebGPU support gives about 5 seconds per image after that. Without WebGPU, the page falls back to a slower CPU path in the browser.
+The first run downloads the fp16 model to the browser cache (roughly a hundred megabytes). Later runs reuse it. A GPU with WebGPU support processes an image in a few seconds after that. Without WebGPU, the page falls back to a slower CPU path in the browser.
 
 ## CLI tool
 
@@ -54,7 +54,7 @@ node bin/bgremover.mjs a.jpg b.png --bg white --out ./cut
 - `--bg <color>` fills the background with a solid colour (name or hex) instead of alpha.
 - `--out <dir>` writes all output files to this folder instead.
 
-The first run downloads the model (about 210MB) to `~/.cache/huggingface`. Later runs reuse it. Processing takes about 15 seconds per image on an M-series Mac, since the CLI runs on CPU only.
+The first run downloads the fp32 model to `~/.cache/huggingface` (roughly twice the browser app's download, since it is full precision). Later runs reuse it. Processing takes longer than the browser app, since the CLI runs on CPU only; expect on the order of several seconds to tens of seconds per image depending on your machine.
 
 ## How it works
 
