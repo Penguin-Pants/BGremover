@@ -18,6 +18,12 @@ npx serve web
 
 Opening `web/index.html` directly from disk (a `file://` URL) does not work. Browsers block ES module scripts, which this app relies on, from loading over `file://`.
 
+**No server available?** Open `bgremover-standalone.html` instead. It is the same app packed into one file, and opens fine directly from disk. It is generated from `web/`, so regenerate it after changing anything there:
+
+```
+node scripts/build-standalone.mjs
+```
+
 **Manual use**
 1. Open the served page.
 2. Drop an image on the page, or click the drop zone to choose a file.
